@@ -1,58 +1,66 @@
-import json, os, uuid, boto3
+import json, os, uuid, base64, boto3
 from datetime import datetime, timezone
 
-bedrock  = boto3.client("bedrock-runtime")
-dynamo   = boto3.resource("dynamodb").Table(os.environ["DYNAMO_TABLE"])
-s3       = boto3.client("s3")
-MODEL_ID = os.environ["BEDROCK_MODEL"]
-BUCKET   = os.environ["S3_BUCKET"]
+bedrock   = boto3.client("bedrock-runtime")
+s3        = boto3.client("s3")
+sns       = boto3.client("sns")
+MODEL_ID  = os.environ["BEDROCK_MODEL"]
+BUCKET    = os.environ["S3_BUCKET"]
+SNS_TOPIC = os.environ["SNS_TOPIC_ARN"]
+
+
+def analyze(transaction: dict) -> dict:
+    response = bedrock.invoke_model(
+        modelId=MODEL_ID,
+        contentType="application/json",
+        accept="application/json",
+        body=json.dumps({
+            "anthropic_version": "bedrock-2023-05-31",
+            "max_tokens": 256,
+            "messages": [{
+                "role": "user",
+                "content": (
+                    "Analyze this financial transaction for leaks, anomalies, or fraud. "
+                    "Reply ONLY with JSON: {\"flagged\": bool, \"reason\": str}.\n\n"
+                    f"{json.dumps(transaction)}"
+                )
+            }]
+        })
+    )
+    result = json.loads(response["body"].read())
+    return json.loads(result["content"][0]["text"])
 
 
 def lambda_handler(event, context):
     for record in event["Records"]:
-        transaction = json.loads(record["body"])
+        # Kinesis records are base64-encoded
+        transaction = json.loads(base64.b64decode(record["kinesis"]["data"]))
         trace_id    = str(uuid.uuid4())
         ts          = int(datetime.now(timezone.utc).timestamp())
 
-        response = bedrock.invoke_model(
-            modelId=MODEL_ID,
-            contentType="application/json",
-            accept="application/json",
-            body=json.dumps({
-                "anthropic_version": "bedrock-2023-05-31",
-                "max_tokens": 512,
-                "messages": [{
-                    "role": "user",
-                    "content": (
-                        "Analyze this financial transaction for leaks, anomalies, or fraud. "
-                        "Reply ONLY with JSON: {\"flagged\": bool, \"reason\": str}.\n\n"
-                        f"{json.dumps(transaction)}"
-                    )
-                }]
-            })
-        )
+        analysis = analyze(transaction)
 
-        result   = json.loads(response["body"].read())
-        analysis = json.loads(result["content"][0]["text"])
-
-        # Full trace → S3 (always)
-        s3.put_object(
-            Bucket=BUCKET,
-            Key=f"traces/{trace_id}.json",
-            Body=json.dumps({
-                "transaction": transaction,
-                "analysis":    analysis,
-                "trace_id":    trace_id,
-                "timestamp":   ts
-            })
-        )
-
-        # Flagged → DynamoDB (always write for audit trail)
-        dynamo.put_item(Item={
-            "transaction_id": trace_id,
-            "timestamp":      ts,
-            "customer_id":    transaction.get("customer_id", "unknown"),
-            "tx_id":          transaction.get("id", "unknown"),
-            "flagged":        analysis.get("flagged", False),
-            "reason":         analysis.get("reason", ""),
-        })
+        if analysis.get("flagged"):
+            # Leak → SNS alert → high-priority SQS
+            sns.publish(
+                TopicArn=SNS_TOPIC,
+                Subject="AFLD: Leak Detected",
+                Message=json.dumps({
+                    "trace_id":    trace_id,
+                    "timestamp":   ts,
+                    "transaction": transaction,
+                    "reason":      analysis["reason"],
+                })
+            )
+        else:
+            # Clean → S3 audit log
+            s3.put_object(
+                Bucket=BUCKET,
+                Key=f"audit/{trace_id}.json",
+                Body=json.dumps({
+                    "trace_id":    trace_id,
+                    "timestamp":   ts,
+                    "transaction": transaction,
+                    "analysis":    analysis,
+                })
+            )

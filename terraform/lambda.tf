@@ -16,8 +16,8 @@ resource "aws_lambda_function" "auditor" {
 
   environment {
     variables = {
-      DYNAMO_TABLE  = aws_dynamodb_table.flags.name
       S3_BUCKET     = aws_s3_bucket.traces.bucket
+      SNS_TOPIC_ARN = aws_sns_topic.leak_alerts.arn
       BEDROCK_MODEL = "anthropic.claude-sonnet-4-6"
     }
   }

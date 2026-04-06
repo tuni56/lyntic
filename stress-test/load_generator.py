@@ -60,10 +60,12 @@ def upload(tx: dict) -> tuple[bool, int]:
     try:
         s3.put_object(Bucket=BUCKET, Key=key, Body=json.dumps(tx))
         return True, 200
-    except s3.exceptions.ClientError as e:
-        code = int(e.response["Error"]["Code"])
-        return False, code
-    except Exception:
+    except Exception as e:
+        code = getattr(e, "response", {}).get("Error", {}).get("Code", "0")
+        if code in ("403", "AccessDenied"):
+            return False, 403
+        if code in ("429", "SlowDown"):
+            return False, 429
         return False, 0
 
 # ── Main ──────────────────────────────────────────────────────────────────────

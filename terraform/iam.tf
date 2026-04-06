@@ -18,15 +18,16 @@ data "aws_iam_policy_document" "permissions" {
   }
 
   statement {
-    sid     = "SQSConsume"
-    actions = ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes"]
-    resources = [aws_sqs_queue.main.arn]
+    sid     = "KinesisConsume"
+    actions = ["kinesis:GetRecords", "kinesis:GetShardIterator",
+               "kinesis:DescribeStream", "kinesis:ListShards"]
+    resources = [aws_kinesis_stream.ingestion.arn]
   }
 
   statement {
-    sid       = "DynamoWrite"
-    actions   = ["dynamodb:PutItem"]
-    resources = [aws_dynamodb_table.flags.arn]
+    sid       = "SNSPublish"
+    actions   = ["sns:Publish"]
+    resources = [aws_sns_topic.leak_alerts.arn]
   }
 
   statement {
