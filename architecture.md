@@ -1,18 +1,23 @@
 ```mermaid
 flowchart LR
-    KDS["📡 Kinesis Data Stream"]
-    SQS["📨 SQS Queue\nlyntic-queue"]
-    DLQ["☠️ DLQ\nlyntic-dlq\n(maxReceive: 3)"]
+    SRC["💳 Transaction Source"]
+    KDS["📡 Kinesis Data Stream\nlyntic-stream"]
     LAM["⚡ Lambda\nlyntic-auditor\nPython 3.12"]
     BED["🤖 Amazon Bedrock\nClaude Sonnet 4.6\nus-east-2"]
-    DYN["🗄️ DynamoDB\nLynticTransactions\nPK: transaction_id\nSK: timestamp\nGSI: CustomerIndex"]
-    S3["🪣 S3\nlyntic-audit-logs\nAES-256\n→ GLACIER_IR @ 90d"]
+    SNS["🔔 SNS\nlyntic-leak-alerts"]
+    SQS["📨 SQS\nlyntic-high-priority"]
+    S3["🪣 S3\nlyntic-audit-logs\nAES-256 → GLACIER_IR @ 90d"]
+    DLQ["☠️ DLQ\nlyntic-dlq\n(Lambda failures)"]
 
-    KDS -->|"produces events"| SQS
-    SQS -->|"trigger (batch: 10)"| LAM
-    SQS -->|"after 3 failures"| DLQ
+    SRC -->|"PutRecord"| KDS
+    KDS -->|"trigger (batch: 10)"| LAM
     LAM -->|"invoke_model"| BED
-    BED -->|"analysis result"| LAM
-    LAM -->|"PutItem (all transactions)"| DYN
-    LAM -->|"PutObject (full trace)"| S3
+    BED -->|"flagged / clean"| LAM
+
+    LAM -->|"Leak 🔴"| SNS
+    SNS -->|"subscribe"| SQS
+
+    LAM -->|"Clean 🟢"| S3
+
+    LAM -.->|"on failure"| DLQ
 ```
