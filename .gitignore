@@ -1,0 +1,17 @@
+# Terraform
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.backup
+*.tfplan
+
+# Lambda build artifact
+lambda.zip
+
+# Python
+__pycache__/
+*.pyc
+
+# Env / secrets
+.env
+*.pem
